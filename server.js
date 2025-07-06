@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3001;
 
 // YOUR CLICKSEND CREDENTIALS - Replace with your actual credentials
 const CLICKSEND_USERNAME = 'yardie524@gmail.com';  // Replace with your ClickSend username
-const CLICKSEND_API_KEY = '26985186-F808-EBBB-C1B9-4D73CD20D803';     // Replace with your ClickSend API key
+const CLICKSEND_API_KEY = 'YOUR_API_KEY_HERE';     // Replace with your ClickSend API key
 
 // Middleware
 app.use(express.json());
@@ -87,14 +87,23 @@ app.post('/api/sms/emergency', async (req, res) => {
       });
     }
 
-    // Prepare location text
-    const locationText = location && location.lat && location.lng
-      ? `Google Maps: https://maps.google.com/maps?q=${location.lat},${location.lng}
+    console.log('📍 Location data received:', JSON.stringify(location, null, 2));
+    
+    // Prepare location text with better validation
+    let locationText;
+    
+    if (location && typeof location.lat === 'number' && typeof location.lng === 'number') {
+      locationText = `Google Maps: https://maps.google.com/maps?q=${location.lat},${location.lng}
 Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}
 Accuracy: ${location.accuracy ? Math.round(location.accuracy) + ' meters' : 'Unknown'}
-Timestamp: ${new Date().toLocaleString()}`
-      : `Location data not available - please provide current location manually
-Check-in failed at: ${new Date().toLocaleString()}`;
+Timestamp: ${new Date().toLocaleString()}`;
+      console.log('✅ Using provided location data');
+    } else {
+      locationText = `Location data not available - GPS coordinates could not be determined
+Emergency occurred at: ${new Date().toLocaleString()}
+Please contact them to determine their current location`;
+      console.log('❌ No valid location data provided');
+    }
 
     // Create emergency message
     const emergencyMessage = `EMERGENCY SAFETY ALERT
