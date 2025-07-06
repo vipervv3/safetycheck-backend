@@ -1,12 +1,6 @@
-// SafetyCheck Backend Server
-// This server acts as a proxy between your frontend app and ClickSend API
-// Eliminates CORS issues and provides a production-ready solution
-
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -14,24 +8,34 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://your-app-domain.com'], // Add your frontend domains
+  origin: true, // Allow all origins for now
   credentials: true
 }));
 
-// Rate limiting to prevent abuse
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per windowMs
+  max: 10,
   message: {
-    error: 'Too many SMS requests from this IP, please try again later.',
-    retryAfter: '15 minutes'
+    error: 'Too many SMS requests, please try again later.'
   }
 });
 
-// Apply rate limiting to SMS endpoints
 app.use('/api/sms', limiter);
 
 // Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'SafetyCheck Backend is running!', 
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      testSms: 'POST /api/sms/test',
+      emergencySms: 'POST /api/sms/emergency'
+    }
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
@@ -47,7 +51,6 @@ app.post('/api/sms/test', async (req, res) => {
     
     const { username, apiKey, phoneNumber, contactName } = req.body;
     
-    // Validate required fields
     if (!username || !apiKey || !phoneNumber || !contactName) {
       return res.status(400).json({
         success: false,
@@ -55,7 +58,6 @@ app.post('/api/sms/test', async (req, res) => {
       });
     }
 
-    // Validate phone number format
     if (!phoneNumber.startsWith('+')) {
       return res.status(400).json({
         success: false,
@@ -73,7 +75,7 @@ Time: ${new Date().toLocaleString()}
 
 You can safely ignore this test message.`;
 
-    // Make request to ClickSend API
+    // Use native fetch (available in Node 18+)
     const response = await fetch('https://rest.clicksend.com/v3/sms/send', {
       method: 'POST',
       headers: {
@@ -130,7 +132,6 @@ app.post('/api/sms/emergency', async (req, res) => {
     
     const { username, apiKey, contacts, location } = req.body;
     
-    // Validate required fields
     if (!username || !apiKey || !contacts || !Array.isArray(contacts)) {
       return res.status(400).json({
         success: false,
@@ -145,7 +146,6 @@ app.post('/api/sms/emergency', async (req, res) => {
       });
     }
 
-    // Prepare location text
     const locationText = location 
       ? `📍 LOCATION: https://maps.google.com/maps?q=${location.lat},${location.lng}
 📍 Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}
@@ -166,7 +166,6 @@ This is an automated safety alert from SafetyCheck app.`;
     let successCount = 0;
     let failCount = 0;
 
-    // Send to each contact
     for (const contact of contacts) {
       try {
         const response = await fetch('https://rest.clicksend.com/v3/sms/send', {
@@ -198,7 +197,6 @@ This is an automated safety alert from SafetyCheck app.`;
             cost: message.message_price
           });
           successCount++;
-          console.log(`✅ Emergency SMS sent to ${contact.name}`);
         } else {
           results.push({
             contact: contact.name,
@@ -207,7 +205,6 @@ This is an automated safety alert from SafetyCheck app.`;
             error: result.response_msg || 'Unknown error'
           });
           failCount++;
-          console.log(`❌ Failed to send to ${contact.name}:`, result.response_msg);
         }
 
       } catch (error) {
@@ -218,7 +215,6 @@ This is an automated safety alert from SafetyCheck app.`;
           error: error.message
         });
         failCount++;
-        console.log(`❌ Network error sending to ${contact.name}:`, error.message);
       }
     }
 
@@ -241,7 +237,7 @@ This is an automated safety alert from SafetyCheck app.`;
   }
 });
 
-// Error handling middleware
+// Error handling
 app.use((error, req, res, next) => {
   console.error('❌ Server error:', error);
   res.status(500).json({
@@ -253,4 +249,7 @@ app.use((error, req, res, next) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 SafetyCheck Backend Server running on port ${PORT}`);
-  console.log(`📡 Health check: http://loc
+  console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
+});
+
+module.exports = app;
