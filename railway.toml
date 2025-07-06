@@ -1,8 +1,10 @@
 [build]
-builder = "NIXPACKS"
+builder = "nixpacks"
 
 [deploy]
 startCommand = "npm start"
+restartPolicyType = "on-failure"
+restartPolicyMaxRetries = 10
 
 [nixpacks]
 nixPacksArchive = false
