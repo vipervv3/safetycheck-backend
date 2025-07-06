@@ -6,8 +6,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // YOUR CLICKSEND CREDENTIALS - Replace with your actual credentials
-const CLICKSEND_USERNAME = 'yardie524@gmail.com';  // Replace with your ClickSend username
-const CLICKSEND_API_KEY = '26985186-F808-EBBB-C1B9-4D73CD20D803';     // Replace with your ClickSend API key
+const CLICKSEND_USERNAME = 'yardie524@gmail.com';  // Your ClickSend username
+const CLICKSEND_API_KEY = '26985186-F808-EBBB-C1B9-4D73CD20D803';  // Your actual API key
 
 // Middleware
 app.use(express.json());
@@ -87,22 +87,49 @@ app.post('/api/sms/emergency', async (req, res) => {
       });
     }
 
+    console.log('📍 Raw request body:', JSON.stringify(req.body, null, 2));
     console.log('📍 Location data received:', JSON.stringify(location, null, 2));
+    console.log('📍 Location type check:', {
+      hasLocation: !!location,
+      locationIsObject: typeof location === 'object',
+      hasLat: location && 'lat' in location,
+      hasLng: location && 'lng' in location,
+      latValue: location?.lat,
+      lngValue: location?.lng,
+      latType: typeof location?.lat,
+      lngType: typeof location?.lng
+    });
     
-    // Prepare location text with better validation
+    // Prepare location text with better validation and direct coordinate access
     let locationText;
     
-    if (location && typeof location.lat === 'number' && typeof location.lng === 'number') {
-      locationText = `Google Maps: https://maps.google.com/maps?q=${location.lat},${location.lng}
-Coordinates: ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}
-Accuracy: ${location.accuracy ? Math.round(location.accuracy) + ' meters' : 'Unknown'}
+    if (location && 
+        location.lat !== null && 
+        location.lat !== undefined && 
+        location.lng !== null && 
+        location.lng !== undefined &&
+        !isNaN(location.lat) && 
+        !isNaN(location.lng)) {
+      
+      const lat = Number(location.lat);
+      const lng = Number(location.lng);
+      
+      locationText = `Google Maps: https://maps.google.com/maps?q=${lat},${lng}
+Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}
+Accuracy: ${location.accuracy ? Math.round(Number(location.accuracy)) + ' meters' : 'Unknown'}
 Timestamp: ${new Date().toLocaleString()}`;
-      console.log('✅ Using provided location data');
+      
+      console.log('✅ Using location data - Lat:', lat, 'Lng:', lng);
     } else {
       locationText = `Location data not available - GPS coordinates could not be determined
 Emergency occurred at: ${new Date().toLocaleString()}
-Please contact them to determine their current location`;
-      console.log('❌ No valid location data provided');
+Please contact them immediately to determine their current location`;
+      
+      console.log('❌ Invalid location data:', {
+        location,
+        lat: location?.lat,
+        lng: location?.lng
+      });
     }
 
     // Create emergency message
