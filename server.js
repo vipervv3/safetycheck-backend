@@ -27,6 +27,46 @@ const limiter = rateLimit({
 });
 app.use('/api/sms', limiter);
 
+// Helper function to validate location data
+const validateLocation = (location) => {
+  console.log('🔍 Validating location:', JSON.stringify(location, null, 2));
+  
+  if (!location) {
+    console.log('❌ No location object provided');
+    return { valid: false, reason: 'No location data provided' };
+  }
+  
+  // Check if lat and lng exist and are numbers
+  if (typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+    console.log('❌ Lat/Lng are not numbers:', {
+      lat: location.lat,
+      lng: location.lng,
+      latType: typeof location.lat,
+      lngType: typeof location.lng
+    });
+    return { valid: false, reason: 'Latitude and longitude must be numbers' };
+  }
+  
+  // Check if lat and lng are valid ranges
+  if (isNaN(location.lat) || isNaN(location.lng)) {
+    console.log('❌ Lat/Lng are NaN');
+    return { valid: false, reason: 'Latitude and longitude cannot be NaN' };
+  }
+  
+  if (location.lat < -90 || location.lat > 90) {
+    console.log('❌ Invalid latitude range:', location.lat);
+    return { valid: false, reason: 'Latitude must be between -90 and 90' };
+  }
+  
+  if (location.lng < -180 || location.lng > 180) {
+    console.log('❌ Invalid longitude range:', location.lng);
+    return { valid: false, reason: 'Longitude must be between -180 and 180' };
+  }
+  
+  console.log('✅ Location validation passed');
+  return { valid: true };
+};
+
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
@@ -51,6 +91,7 @@ app.get('/api/health', (req, res) => {
 app.post('/api/sms/emergency', async (req, res) => {
   try {
     console.log('🚨 Emergency SMS request received');
+    console.log('📍 Raw request body:', JSON.stringify(req.body, null, 2));
     
     const { contacts, location, userInfo } = req.body;
     
@@ -87,67 +128,53 @@ app.post('/api/sms/emergency', async (req, res) => {
       });
     }
 
-    console.log('📍 Raw request body:', JSON.stringify(req.body, null, 2));
-    console.log('📍 Location data received:', JSON.stringify(location, null, 2));
-    console.log('📍 Location type check:', {
-      hasLocation: !!location,
-      locationIsObject: typeof location === 'object',
-      hasLat: location && 'lat' in location,
-      hasLng: location && 'lng' in location,
-      latValue: location?.lat,
-      lngValue: location?.lng,
-      latType: typeof location?.lat,
-      lngType: typeof location?.lng
-    });
-    
-    // Prepare location text with better validation and direct coordinate access
+    // Validate and process location data
+    const locationValidation = validateLocation(location);
     let locationText;
+    let hasValidLocation = locationValidation.valid;
     
-    if (location && 
-        location.lat !== null && 
-        location.lat !== undefined && 
-        location.lng !== null && 
-        location.lng !== undefined &&
-        !isNaN(location.lat) && 
-        !isNaN(location.lng)) {
-      
+    if (hasValidLocation) {
+      // Ensure we have clean number values
       const lat = Number(location.lat);
       const lng = Number(location.lng);
       
-      locationText = `Google Maps: https://maps.google.com/maps?q=${lat},${lng}
-Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}
-Accuracy: ${location.accuracy ? Math.round(Number(location.accuracy)) + ' meters' : 'Unknown'}
-Timestamp: ${new Date().toLocaleString()}`;
+      locationText = `🗺️ LOCATION INFORMATION:
+📍 Google Maps: https://maps.google.com/maps?q=${lat},${lng}
+📐 Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}
+🎯 Accuracy: ${location.accuracy ? Math.round(Number(location.accuracy)) + ' meters' : 'Unknown'}
+⏰ Timestamp: ${location.timestamp || new Date().toISOString()}
+
+Click the Google Maps link above to see their exact location.`;
       
-      console.log('✅ Using location data - Lat:', lat, 'Lng:', lng);
+      console.log('✅ Using valid location data - Lat:', lat, 'Lng:', lng);
     } else {
-      locationText = `Location data not available - GPS coordinates could not be determined
-Emergency occurred at: ${new Date().toLocaleString()}
-Please contact them immediately to determine their current location`;
+      locationText = `⚠️ LOCATION UNAVAILABLE:
+Location data could not be determined at the time of emergency.
+Reason: ${locationValidation.reason || 'Unknown'}
+Time of alert: ${new Date().toLocaleString()}
+
+IMPORTANT: Please contact them immediately to determine their current location.`;
       
-      console.log('❌ Invalid location data:', {
-        location,
-        lat: location?.lat,
-        lng: location?.lng
-      });
+      console.log('❌ Invalid location data:', locationValidation.reason);
     }
 
-    // Create emergency message
-    const emergencyMessage = `EMERGENCY SAFETY ALERT
+    // Create emergency message with better formatting
+    const emergencyMessage = `🚨 EMERGENCY SAFETY ALERT 🚨
 
-Your emergency contact has failed to respond to their safety check-in and may require immediate assistance.
+Your emergency contact has FAILED to respond to their safety check-in and may require IMMEDIATE assistance.
 
-CURRENT LOCATION:
 ${locationText}
 
-REQUIRED ACTION:
-- Contact them immediately by phone
-- If unreachable, consider contacting local emergency services
-- Check their last known location using the coordinates above
+🚨 REQUIRED IMMEDIATE ACTIONS:
+1. Contact them RIGHT NOW by phone
+2. If unreachable, consider contacting local emergency services
+3. Check their last known location using coordinates above
+4. Verify their safety as soon as possible
 
-This alert was automatically generated by SafetyCheck Emergency App at ${new Date().toLocaleString()}
+⏰ Alert generated: ${new Date().toLocaleString()}
+📱 Sent by: SafetyCheck Emergency App
 
-Time is critical - please respond now.`;
+TIME IS CRITICAL - PLEASE RESPOND IMMEDIATELY`;
 
     const results = [];
     let successCount = 0;
@@ -176,6 +203,7 @@ Time is critical - please respond now.`;
         });
 
         const result = await response.json();
+        console.log(`📡 ClickSend response for ${contact.name}:`, result);
 
         if (response.ok && result.http_code === 200) {
           const message = result.data.messages[0];
@@ -189,14 +217,15 @@ Time is critical - please respond now.`;
           successCount++;
           console.log(`✅ Emergency SMS sent to ${contact.name} - Message ID: ${message.message_id}`);
         } else {
+          const errorMsg = result.response_msg || result.data?.messages?.[0]?.message_status || 'Unknown ClickSend error';
           results.push({
             contact: contact.name,
             phone: contact.phone,
             status: 'failed',
-            error: result.response_msg || 'Unknown ClickSend error'
+            error: errorMsg
           });
           failCount++;
-          console.log(`❌ Failed to send to ${contact.name}:`, result.response_msg);
+          console.log(`❌ Failed to send to ${contact.name}:`, errorMsg);
         }
 
       } catch (error) {
@@ -213,8 +242,10 @@ Time is critical - please respond now.`;
 
     // Log emergency alert for monitoring
     console.log(`🚨 EMERGENCY ALERT SUMMARY:`);
-    console.log(`   Location: ${location ? `${location.lat}, ${location.lng}` : 'Unknown'}`);
+    console.log(`   Location: ${hasValidLocation ? `${location.lat}, ${location.lng}` : 'UNAVAILABLE'}`);
+    console.log(`   Location Status: ${hasValidLocation ? 'VALID' : locationValidation.reason}`);
     console.log(`   Contacts notified: ${successCount}/${contacts.length}`);
+    console.log(`   Success rate: ${((successCount/contacts.length)*100).toFixed(1)}%`);
     console.log(`   Timestamp: ${new Date().toISOString()}`);
 
     res.json({
@@ -222,9 +253,14 @@ Time is critical - please respond now.`;
       summary: {
         total: contacts.length,
         sent: successCount,
-        failed: failCount
+        failed: failCount,
+        locationAvailable: hasValidLocation
       },
-      results: results
+      results: results,
+      locationStatus: {
+        available: hasValidLocation,
+        reason: hasValidLocation ? 'Valid location data received' : locationValidation.reason
+      }
     });
 
   } catch (error) {
@@ -234,6 +270,24 @@ Time is critical - please respond now.`;
       error: 'Emergency alert system temporarily unavailable. Please try again or contact emergency services directly.'
     });
   }
+});
+
+// Debug endpoint to test location validation (remove in production)
+app.post('/api/debug/location', (req, res) => {
+  const { location } = req.body;
+  const validation = validateLocation(location);
+  
+  res.json({
+    location: location,
+    validation: validation,
+    received: {
+      hasLocation: !!location,
+      lat: location?.lat,
+      lng: location?.lng,
+      latType: typeof location?.lat,
+      lngType: typeof location?.lng
+    }
+  });
 });
 
 // Block test endpoint completely
