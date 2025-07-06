@@ -5,6 +5,10 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// YOUR CLICKSEND CREDENTIALS - Replace with your actual credentials
+const CLICKSEND_USERNAME = 'yardie524@gmail.com';  // Replace with your ClickSend username
+const CLICKSEND_API_KEY = '26985186-F808-EBBB-C1B9-4D73CD20D803';     // Replace with your ClickSend API key
+
 // Middleware
 app.use(express.json());
 app.use(cors({
@@ -12,24 +16,24 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting
+// Rate limiting to prevent abuse
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many requests' }
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 emergency requests per 15 minutes
+  message: { 
+    error: 'Too many emergency requests from this IP. Please wait before sending another alert.',
+    retryAfter: '15 minutes'
+  }
 });
 app.use('/api/sms', limiter);
 
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'SafetyCheck Backend is running!',
-    status: 'success',
+    message: 'SafetyCheck Emergency Alert System',
+    status: 'ready',
     timestamp: new Date().toISOString(),
-    endpoints: {
-      health: '/api/health',
-      emergencySms: 'POST /api/sms/emergency - EMERGENCY ALERTS ONLY'
-    }
+    info: 'Centralized emergency SMS service - no API keys required for users'
   });
 });
 
@@ -37,39 +41,49 @@ app.get('/', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
-    service: 'SafetyCheck Backend',
-    timestamp: new Date().toISOString()
+    service: 'SafetyCheck Emergency Backend',
+    timestamp: new Date().toISOString(),
+    smsService: 'ClickSend ready'
   });
 });
 
-// Test SMS endpoint - DISABLED FOR EMERGENCY USE ONLY
-app.post('/api/sms/test', async (req, res) => {
-  res.status(403).json({
-    success: false,
-    error: 'Test messaging disabled. This app is for emergency alerts only.',
-    message: 'Use the safety timer to send emergency alerts to your contacts.'
-  });
-});
-
-// Emergency SMS endpoint
+// Emergency SMS endpoint - No user credentials required
 app.post('/api/sms/emergency', async (req, res) => {
   try {
     console.log('🚨 Emergency SMS request received');
     
-    const { username, apiKey, contacts, location } = req.body;
+    const { contacts, location, userInfo } = req.body;
     
     // Validate required fields
-    if (!username || !apiKey || !contacts || !Array.isArray(contacts)) {
+    if (!contacts || !Array.isArray(contacts)) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: username, apiKey, contacts (array)'
+        error: 'Emergency contacts are required'
       });
     }
 
     if (contacts.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No emergency contacts provided'
+        error: 'At least one emergency contact is required'
+      });
+    }
+
+    // Validate phone numbers
+    for (const contact of contacts) {
+      if (!contact.phone || !contact.phone.startsWith('+')) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid phone number for ${contact.name}. Must include country code (e.g., +1234567890)`
+        });
+      }
+    }
+
+    // Check if ClickSend credentials are configured
+    if (!CLICKSEND_USERNAME || !CLICKSEND_API_KEY || CLICKSEND_API_KEY === 'YOUR_API_KEY_HERE') {
+      return res.status(500).json({
+        success: false,
+        error: 'SMS service not configured. Please contact the app administrator.'
       });
     }
 
@@ -81,6 +95,7 @@ Accuracy: ${location.accuracy ? Math.round(location.accuracy) + ' meters' : 'Unk
 Timestamp: ${new Date().toLocaleString()}`
       : 'Location data not available';
 
+    // Create emergency message
     const emergencyMessage = `EMERGENCY SAFETY ALERT
 
 Your emergency contact has failed to respond to their safety check-in and may require immediate assistance.
@@ -101,14 +116,16 @@ Time is critical - please respond now.`;
     let successCount = 0;
     let failCount = 0;
 
-    // Send to each contact
+    // Send to each contact using centralized credentials
     for (const contact of contacts) {
       try {
+        console.log(`📤 Sending emergency alert to ${contact.name} (${contact.phone})`);
+        
         const response = await fetch('https://rest.clicksend.com/v3/sms/send', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Basic ' + Buffer.from(username + ':' + apiKey).toString('base64')
+            'Authorization': 'Basic ' + Buffer.from(CLICKSEND_USERNAME + ':' + CLICKSEND_API_KEY).toString('base64')
           },
           body: JSON.stringify({
             messages: [
@@ -133,13 +150,13 @@ Time is critical - please respond now.`;
             cost: message.message_price
           });
           successCount++;
-          console.log(`✅ Emergency SMS sent to ${contact.name}`);
+          console.log(`✅ Emergency SMS sent to ${contact.name} - Message ID: ${message.message_id}`);
         } else {
           results.push({
             contact: contact.name,
             phone: contact.phone,
             status: 'failed',
-            error: result.response_msg || 'Unknown error'
+            error: result.response_msg || 'Unknown ClickSend error'
           });
           failCount++;
           console.log(`❌ Failed to send to ${contact.name}:`, result.response_msg);
@@ -150,12 +167,18 @@ Time is critical - please respond now.`;
           contact: contact.name,
           phone: contact.phone,
           status: 'failed',
-          error: error.message
+          error: 'Network error: ' + error.message
         });
         failCount++;
         console.log(`❌ Network error sending to ${contact.name}:`, error.message);
       }
     }
+
+    // Log emergency alert for monitoring
+    console.log(`🚨 EMERGENCY ALERT SUMMARY:`);
+    console.log(`   Location: ${location ? `${location.lat}, ${location.lng}` : 'Unknown'}`);
+    console.log(`   Contacts notified: ${successCount}/${contacts.length}`);
+    console.log(`   Timestamp: ${new Date().toISOString()}`);
 
     res.json({
       success: successCount > 0,
@@ -168,29 +191,38 @@ Time is critical - please respond now.`;
     });
 
   } catch (error) {
-    console.error('❌ Emergency SMS error:', error);
+    console.error('❌ Emergency SMS system error:', error);
     res.status(500).json({
       success: false,
-      error: 'Internal server error: ' + error.message
+      error: 'Emergency alert system temporarily unavailable. Please try again or contact emergency services directly.'
     });
   }
 });
 
-// Error handling middleware
+// Block test endpoint completely
+app.post('/api/sms/test', (req, res) => {
+  res.status(403).json({
+    success: false,
+    error: 'Test messaging not available. This system is for emergency alerts only.'
+  });
+});
+
+// Global error handling
 app.use((error, req, res, next) => {
   console.error('❌ Server error:', error);
   res.status(500).json({
     success: false,
-    error: 'Internal server error'
+    error: 'Internal system error'
   });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 SafetyCheck Backend Server running on port ${PORT}`);
+  console.log(`🚀 SafetyCheck Emergency Backend running on port ${PORT}`);
   console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🚨 Emergency SMS endpoint: POST http://localhost:${PORT}/api/sms/emergency`);
-  console.log(`⚠️  EMERGENCY ALERTS ONLY - No test messaging available`);
+  console.log(`🔐 Using centralized ClickSend credentials: ${CLICKSEND_USERNAME}`);
+  console.log(`⚠️  EMERGENCY ALERTS ONLY - No user credentials required`);
 });
 
 module.exports = app;
